@@ -184,8 +184,14 @@ else
     log "WARNING: no checksum file found alongside archive, skipping verification."
 fi
 
+SAFETY_DIR=""
 if [[ -d "$PLEX_DATA_DIR" ]]; then
-    SAFETY_DIR="${PLEX_DATA_DIR}.fresh_install_bak.$(date '+%Y%m%d_%H%M%S')"
+    # Kept well outside Library/Application Support entirely (not just outside
+    # the "Plex Media Server" folder) - Plex's own docs warn that anything it
+    # doesn't recognize under its data directory can get swept up by its
+    # periodic cleanup, so this has no business being anywhere nearby.
+    mkdir -p /var/backups
+    SAFETY_DIR="/var/backups/plex_fresh_install_bak.$(date '+%Y%m%d_%H%M%S')"
     log "Moving fresh-install data dir aside to $SAFETY_DIR (not deleting, just in case)..."
     mv "$PLEX_DATA_DIR" "$SAFETY_DIR"
 fi
@@ -223,6 +229,10 @@ Restore finished. Next, check in a browser at http://<rpi5-ip>:32400/web :
     you'll need to update the router's forwarding rule to the RPI5's IP.
   - Confirm the server shows as the same server (same name/identity) under
     Settings > General, and that Remote Access still works if you use it.
-  - Once confirmed working, you can remove the .fresh_install_bak.* directory
-    left under: $PLEX_DATA_PARENT
+  - If you disabled "Empty trash automatically after every scan" on the RPI3
+    before backing up, you can turn that back on now.
 EOF
+
+if [[ -n "$SAFETY_DIR" ]]; then
+    log "Once everything's confirmed working, you can remove the fresh-install backup at: $SAFETY_DIR"
+fi

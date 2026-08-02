@@ -30,17 +30,21 @@ instead of quietly writing a bogus entry to `/etc/fstab`.
 
 1. Copy this whole repo (including your filled-in `config.env`) to the RPI3
    (e.g. `scp -r . pi@rpi3:~/plex-migration/`), or clone it there.
-2. On the RPI3:
+2. On the RPI3, in the Plex web app: **Settings > Manage > Libraries**, and
+   disable "Empty trash automatically after every scan" for each library.
+   This is Plex's own recommended prep step before a migration - it stops
+   Plex from prematurely trashing library entries during the transition.
+3. On the RPI3:
    ```bash
    chmod +x scripts/plex_backup.sh
    sudo ./scripts/plex_backup.sh
    ```
    This writes the archive to `/mnt/newdisk/plex_backups/<timestamp>/`.
-3. Shut down the RPI3, move the two USB drives (`hdddisk` and `newdisk`,
+4. Shut down the RPI3, move the two USB drives (`hdddisk` and `newdisk`,
    containing your media + the fresh backup) over to the RPI5.
-4. Flash the latest Raspberry Pi OS (64-bit) to the RPI5's SD card, boot it,
+5. Flash the latest Raspberry Pi OS (64-bit) to the RPI5's SD card, boot it,
    enable SSH, attach the two USB drives.
-5. Copy `scripts/plex_restore_setup.sh` to the RPI5 and run it:
+6. Copy `scripts/plex_restore_setup.sh` to the RPI5 and run it:
    ```bash
    chmod +x scripts/plex_restore_setup.sh
    sudo ./scripts/plex_restore_setup.sh
@@ -50,8 +54,9 @@ instead of quietly writing a bogus entry to `/etc/fstab`.
    ```bash
    sudo ./scripts/plex_restore_setup.sh /mnt/newdisk/plex_backups/20260802_120000/plex_backup_20260802_120000.tar.gz
    ```
-6. Open `http://<rpi5-ip>:32400/web`, confirm libraries and settings look
-   right (see the script's final printout for a short checklist).
+7. Open `http://<rpi5-ip>:32400/web`, confirm libraries and settings look
+   right (see the script's final printout for a short checklist), then
+   re-enable "Empty trash automatically after every scan" from step 2.
 
 ## Firewall (ufw)
 
@@ -81,7 +86,10 @@ this section entirely.
   create on a RPI3. Flip `INCLUDE_GENERATED_MEDIA=true` in the backup script
   if you'd rather not wait for Plex to regenerate those.
 - The restore script moves aside (not deletes) whatever data directory a
-  fresh Plex install creates, so nothing is destroyed if something looks off.
+  fresh Plex install creates, to `/var/backups/plex_fresh_install_bak.<timestamp>`
+  - deliberately outside `Library/Application Support` entirely, per Plex's
+  own warning that anything it doesn't recognize under its data directory can
+  get swept up by its periodic cleanup.
 - Plex's official apt repo publishes arm64 builds, so this works whether the
   RPI5 image is 32-bit or 64-bit Raspberry Pi OS (64-bit recommended).
 - The backup's `.sha256` checksum guards against accidental corruption/bit-rot
