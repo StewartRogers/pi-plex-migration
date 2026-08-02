@@ -10,22 +10,12 @@
 
 set -euo pipefail
 
-### --- Load machine-specific config (drive UUIDs/mounts) --------------------
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="${SCRIPT_DIR}/../config.env"
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    echo "ERROR: config.env not found at $CONFIG_FILE" >&2
-    echo "Copy config.example.env to config.env and fill in your drive UUIDs (see 'lsblk -f')." >&2
-    exit 1
-fi
-# shellcheck disable=SC1090
-source "$CONFIG_FILE"
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+load_config "$SCRIPT_DIR"
 
 ### --- Config: edit these if your layout differs ---------------------------
-
-PLEX_DATA_DIR="/var/lib/plexmediaserver/Library/Application Support/Plex Media Server"
-PLEX_SERVICE="plexmediaserver"
 
 # Destination drive for the backup archive (has the most free space of the two)
 BACKUP_DEST_ROOT="${NEWDISK_MOUNT}/plex_backups"
@@ -39,8 +29,6 @@ RETENTION_COUNT=3
 INCLUDE_GENERATED_MEDIA=false
 
 ### --- End config -----------------------------------------------------------
-
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 if [[ $EUID -ne 0 ]]; then
     echo "Must be run as root (sudo $0)" >&2
@@ -113,6 +101,10 @@ sha256sum "$ARCHIVE" > "$CHECKSUM"
 
 log "Writing manifest..."
 {
+    echo "# This file lists this machine's hostname and every attached disk's"
+    echo "# UUID/label - useful for troubleshooting your own migration, but"
+    echo "# don't paste it unredacted into a public forum post or bug report."
+    echo ""
     echo "backup_timestamp=$TIMESTAMP"
     echo "hostname=$(hostname)"
     echo "arch=$(uname -m)"

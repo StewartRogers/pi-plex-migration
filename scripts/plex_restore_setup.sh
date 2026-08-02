@@ -17,23 +17,12 @@
 
 set -euo pipefail
 
-### --- Load machine-specific config (drive UUIDs/mounts) --------------------
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_FILE="${SCRIPT_DIR}/../config.env"
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    echo "ERROR: config.env not found at $CONFIG_FILE" >&2
-    echo "Copy config.example.env to config.env and fill in your drive UUIDs (see 'lsblk -f')." >&2
-    exit 1
-fi
-# shellcheck disable=SC1090
-source "$CONFIG_FILE"
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+load_config "$SCRIPT_DIR"
 
 ### --- Config: must match the source machine's setup ------------------------
-
-PLEX_DATA_PARENT="/var/lib/plexmediaserver/Library/Application Support"
-PLEX_DATA_DIR="${PLEX_DATA_PARENT}/Plex Media Server"
-PLEX_SERVICE="plexmediaserver"
 
 # Where to look for backups if no path is given as $1 (newest *.tar.gz wins)
 BACKUP_SEARCH_DIRS=("${NEWDISK_MOUNT}/plex_backups" "${HDDDISK_MOUNT}/plex_backups")
@@ -43,8 +32,6 @@ BACKUP_SEARCH_DIRS=("${NEWDISK_MOUNT}/plex_backups" "${HDDDISK_MOUNT}/plex_backu
 CONFIGURE_FIREWALL=true
 
 ### --- End config -----------------------------------------------------------
-
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 if [[ $EUID -ne 0 ]]; then
     echo "Must be run as root (sudo $0)" >&2
@@ -64,19 +51,22 @@ apt-get install -y curl gnupg ca-certificates >/dev/null
 ### 1. fstab entries + mounts -------------------------------------------------
 
 ensure_fstab_entry() {
-    local uuid="$1" mount_point="$2"
-    if grep -q "$uuid" /etc/fstab; then
+    local uuid="$1" mount_point="$2" fstype="$3"
+    # Anchored on word boundaries so this can't false-match a UUID that's
+    # merely a substring of another entry (or of a comment).
+    if grep -qE "(^|[[:space:]])${uuid}([[:space:]]|$)" /etc/fstab; then
         log "fstab already has an entry for UUID $uuid, skipping."
         return
     fi
     log "Adding fstab entry for UUID $uuid -> $mount_point"
     mkdir -p "$mount_point"
     cp /etc/fstab "/etc/fstab.bak.$(date '+%Y%m%d_%H%M%S')"
-    echo "/dev/disk/by-uuid/${uuid}    ${mount_point}         ext4    defaults   0   0" >> /etc/fstab
+    # 'nofail' keeps a missing/misidentified drive from hanging boot.
+    echo "/dev/disk/by-uuid/${uuid}    ${mount_point}         ${fstype}    defaults,nofail   0   0" >> /etc/fstab
 }
 
-ensure_fstab_entry "$HDDDISK_UUID" "$HDDDISK_MOUNT"
-ensure_fstab_entry "$NEWDISK_UUID" "$NEWDISK_MOUNT"
+ensure_fstab_entry "$HDDDISK_UUID" "$HDDDISK_MOUNT" "$HDDDISK_FSTYPE"
+ensure_fstab_entry "$NEWDISK_UUID" "$NEWDISK_MOUNT" "$NEWDISK_FSTYPE"
 
 log "Mounting all fstab entries..."
 mount -a
@@ -112,7 +102,14 @@ if [[ "$CONFIGURE_FIREWALL" == "true" ]]; then
     # Detect the local LAN subnet (e.g. 192.168.1.0/24) to scope the
     # LAN-only discovery/companion ports below. These don't need to be
     # reachable from the internet, only from other devices on the same LAN.
-    LAN_SUBNET=$(ip -4 route show scope link 2>/dev/null | awk '{print $1}' | head -n1 || true)
+    # Derived from the default route's interface specifically, rather than
+    # just the first "scope link" route, so a docker/VPN/bridge interface
+    # can't get picked instead of the real LAN NIC.
+    DEFAULT_IFACE=$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}' || true)
+    LAN_SUBNET=""
+    if [[ -n "$DEFAULT_IFACE" ]]; then
+        LAN_SUBNET=$(ip -4 route show scope link dev "$DEFAULT_IFACE" 2>/dev/null | awk '{print $1}' | head -n1 || true)
+    fi
 
     if [[ -n "$LAN_SUBNET" ]]; then
         log "Allowing Plex LAN-only ports (DLNA/GDM discovery, Companion) from $LAN_SUBNET..."
@@ -138,12 +135,14 @@ fi
 
 ### 3. Install Plex from the official apt repo --------------------------------
 
-if command -v plexmediaserver >/dev/null 2>&1 || dpkg -s plexmediaserver >/dev/null 2>&1; then
+if dpkg -s plexmediaserver >/dev/null 2>&1; then
     log "plexmediaserver already installed, skipping install step."
 else
     log "Adding Plex apt repo..."
     install -d -m 0755 /usr/share/keyrings
-    curl -fsSL https://downloads.plex.tv/plex-keys/PlexSign.key \
+    # No -L: this key URL isn't expected to redirect, so fail loudly instead
+    # of silently trusting whatever a redirect might point to.
+    curl -fsS https://downloads.plex.tv/plex-keys/PlexSign.key \
         | gpg --dearmor -o /usr/share/keyrings/plex-archive-keyring.gpg
 
     echo "deb [signed-by=/usr/share/keyrings/plex-archive-keyring.gpg] https://downloads.plex.tv/repo/deb public main" \
