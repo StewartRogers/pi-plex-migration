@@ -163,8 +163,7 @@ systemctl stop "$PLEX_SERVICE" || true
 BACKUP_ARCHIVE="${1:-}"
 if [[ -z "$BACKUP_ARCHIVE" ]]; then
     log "No backup path given, searching for the newest archive..."
-    BACKUP_ARCHIVE=$(find "${BACKUP_SEARCH_DIRS[@]}" -name '*.tar.gz' -type f 2>/dev/null \
-        | xargs -I{} stat --format '%Y {}' {} 2>/dev/null \
+    BACKUP_ARCHIVE=$(find "${BACKUP_SEARCH_DIRS[@]}" -name '*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null \
         | sort -rn | head -n1 | cut -d' ' -f2- || true)
 fi
 

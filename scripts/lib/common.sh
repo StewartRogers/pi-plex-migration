@@ -5,8 +5,12 @@
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
+# These are used by the scripts that source this file, not by common.sh
+# itself, so shellcheck can't see the usage when checking this file alone.
 PLEX_DATA_PARENT="/var/lib/plexmediaserver/Library/Application Support"
+# shellcheck disable=SC2034
 PLEX_DATA_DIR="${PLEX_DATA_PARENT}/Plex Media Server"
+# shellcheck disable=SC2034
 PLEX_SERVICE="plexmediaserver"
 
 # Loads config.env (expected one directory above the calling script) and
