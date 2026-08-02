@@ -1,66 +1,114 @@
-# Plex RPI3 -> RPI5 Migration
+# Plex Server Migration (e.g. RPI3 -> RPI5)
 
-Two scripts under `scripts/`, sharing helpers from `scripts/lib/common.sh`:
+Scripts to move a Plex Media Server install between two systems, backed by
+one or more USB drives: back it up on the source, physically move the
+drive(s) over, then restore onto a freshly-imaged destination. The source
+is taken fully offline first - this isn't a live/concurrent cutover.
 
-- `plex_backup.sh` - run on the **RPI3** (source). Stops Plex, archives its
-  settings/metadata/databases to `/mnt/newdisk/plex_backups/`, checksums it,
-  restarts Plex.
-- `plex_restore_setup.sh` - run on the **RPI5** (destination, fresh Raspberry
-  Pi OS install). Mounts the two USB drives at the same paths as the RPI3,
-  configures the firewall, installs Plex from the official apt repo, and
+Everything under `scripts/`, sharing helpers from `scripts/lib/common.sh`:
+
+- `configure.sh` - interactive wizard. Detects attached drives and writes
+  `config.env` for you. Run this first, on either machine.
+- `plex_backup.sh` - run on the **source** system. Updates Plex to the
+  latest version, stops it, archives its settings/metadata/databases to
+  your configured backup drive, checksums it, restarts Plex.
+- `plex_restore_setup.sh` - run on the **destination** system (fresh
+  Raspberry Pi OS install, or any fresh Debian-based install). Mounts your
+  configured drives at the same paths as the source, configures the
+  firewall, installs (or updates) Plex from the official apt repo, and
   restores the backup into it.
+
+Works with any number of drives - one, two, or more - not just a fixed pair.
 
 ## Setup
 
-Both scripts read drive UUIDs/mount points/filesystem types from `config.env`
-(gitignored, never committed - it's specific to your hardware):
-
 ```bash
-cp config.example.env config.env
-lsblk -f   # find your drives' UUIDs and filesystem types
-# edit config.env with your actual UUIDs, mount points, and fstypes
-chmod 600 config.env   # it's sourced as root by both scripts
+./scripts/configure.sh
 ```
 
-Both scripts refuse to run if `config.env` is missing or still has the
-example's placeholder UUID, so a forgotten edit fails fast with a clear error
-instead of quietly writing a bogus entry to `/etc/fstab`.
+This scans attached drives with `lsblk`, lets you pick which ones are part
+of your migration, asks where backups should live, and writes `config.env`
+(gitignored, never committed - it's specific to your hardware). It also sets
+permissions to `600`, since the file is sourced as root by both scripts.
+
+Prefer to do it by hand instead? Copy `config.example.env` to `config.env`
+and fill it in yourself; `lsblk -f` gives you the UUIDs/filesystem types.
+
+Either way, both scripts refuse to run if `config.env` is missing, malformed,
+or still has the example's placeholder UUID - a forgotten edit fails fast
+with a clear error instead of quietly writing a bogus entry to `/etc/fstab`.
+
+### config.env reference
+
+```bash
+# One entry per drive involved in the migration.
+# Format: "UUID:MOUNT_POINT:FSTYPE"
+DRIVES=(
+    "a1b2c3d4-e5f6-7890-abcd-ef1234567890:/mnt/hdddisk:ext4"
+    "f0e1d2c3-b4a5-6978-fedc-ba0987654321:/mnt/newdisk:ext4"
+)
+
+BACKUP_DEST_MOUNT="/mnt/newdisk"   # must be one of the mount points above
+BACKUP_DEST_SUBDIR="plex_backups"
+
+RETENTION_COUNT=3                  # how many past backups to keep
+INCLUDE_GENERATED_MEDIA=false      # back up regenerable thumbnails too?
+CONFIGURE_FIREWALL=true            # set up ufw during restore?
+UPDATE_PLEX=true                   # update Plex to latest during both steps?
+```
 
 ## Steps
 
-1. Copy this whole repo (including your filled-in `config.env`) to the RPI3
-   (e.g. `scp -r . pi@rpi3:~/plex-migration/`), or clone it there.
-2. On the RPI3, in the Plex web app: **Settings > Manage > Libraries**, and
-   disable "Empty trash automatically after every scan" for each library.
-   This is Plex's own recommended prep step before a migration - it stops
-   Plex from prematurely trashing library entries during the transition.
-3. On the RPI3:
+1. Copy this whole repo (including your filled-in `config.env`) to the
+   source system (e.g. `scp -r . pi@source:~/plex-migration/`), or clone it
+   there and run `configure.sh` on that machine.
+2. On the source, in the Plex web app: **Settings > Manage > Libraries**,
+   and disable "Empty trash automatically after every scan" for each
+   library. This is Plex's own recommended prep step before a migration -
+   it stops Plex from prematurely trashing library entries during the
+   transition.
+3. On the source:
    ```bash
    chmod +x scripts/plex_backup.sh
    sudo ./scripts/plex_backup.sh
    ```
-   This writes the archive to `/mnt/newdisk/plex_backups/<timestamp>/`.
-4. Shut down the RPI3, move the two USB drives (`hdddisk` and `newdisk`,
-   containing your media + the fresh backup) over to the RPI5.
-5. Flash the latest Raspberry Pi OS (64-bit) to the RPI5's SD card, boot it,
-   enable SSH, attach the two USB drives.
-6. Copy `scripts/plex_restore_setup.sh` to the RPI5 and run it:
+   This updates Plex to the latest version, then writes the archive to
+   `<BACKUP_DEST_MOUNT>/<BACKUP_DEST_SUBDIR>/<timestamp>/`.
+4. Shut down the source system, move the configured drive(s) - containing
+   your media plus the fresh backup - over to the destination.
+5. Flash a fresh OS to the destination (e.g. the latest Raspberry Pi OS,
+   64-bit), boot it, enable SSH, attach the drive(s).
+6. Copy the repo (including the same `config.env`) to the destination and
+   run:
    ```bash
    chmod +x scripts/plex_restore_setup.sh
    sudo ./scripts/plex_restore_setup.sh
    ```
-   It auto-finds the newest backup under `/mnt/newdisk/plex_backups` or
-   `/mnt/hdddisk/plex_backups`. To restore a specific archive instead:
+   It auto-finds the newest backup under your configured drives. To restore
+   a specific archive instead:
    ```bash
    sudo ./scripts/plex_restore_setup.sh /mnt/newdisk/plex_backups/20260802_120000/plex_backup_20260802_120000.tar.gz
    ```
-7. Open `http://<rpi5-ip>:32400/web`, confirm libraries and settings look
-   right (see the script's final printout for a short checklist), then
+7. Open `http://<destination-ip>:32400/web`, confirm libraries and settings
+   look right (see the script's final printout for a short checklist), then
    re-enable "Empty trash automatically after every scan" from step 2.
+
+## Keeping Plex up to date
+
+Both scripts call the same `update_plex_package` helper (`scripts/lib/common.sh`):
+
+- **Backup**: before stopping the service, updates Plex to the latest apt
+  candidate first, so the archived data matches the latest version's schema.
+- **Restore**: installs Plex if missing, or updates it to the latest apt
+  candidate if it's already present (e.g. on a re-run) - either way you end
+  up on the latest version, not whatever happened to be cached.
+
+Set `UPDATE_PLEX=false` in `config.env` to skip this and leave whatever
+version is already installed alone.
 
 ## Firewall (ufw)
 
-The restore script configures `ufw` on the RPI5 by default:
+The restore script configures `ufw` on the destination by default:
 
 - SSH is allowed first (auto-detected port, default 22) so enabling the
   firewall can't lock you out.
@@ -70,37 +118,37 @@ The restore script configures `ufw` on the RPI5 by default:
 - Default policy becomes deny-incoming / allow-outgoing.
 
 If you use a router port-forward for remote access, that's separate from
-this Pi's firewall - point it at the RPI5's IP after the move. Set
-`CONFIGURE_FIREWALL=false` near the top of `plex_restore_setup.sh` to skip
-this section entirely.
+this Pi's firewall - point it at the destination's IP after the move. Set
+`CONFIGURE_FIREWALL=false` in `config.env` to skip this section entirely.
 
 ## Notes / assumptions
 
-- Both drives are UUID-pinned in `/etc/fstab` on the RPI3. The restore script
-  replicates the same fstab lines (using the UUIDs/fstypes from your
-  `config.env`, with `nofail` added) on the RPI5, so Plex library paths need
-  no changes and a missing/misidentified drive won't hang the boot.
+- Each configured drive is UUID-pinned in `/etc/fstab` on the source. The
+  restore script replicates the same fstab lines (using the UUIDs/fstypes
+  from your `config.env`, with `nofail` added) on the destination, so Plex
+  library paths need no changes and a missing/misidentified drive won't
+  hang the boot.
 - The backup skips `Cache/`, `Crash Reports/`, `Logs/`, `Diagnostics/`,
   `Codecs/`, and (by default) `Media/` (generated thumbnails/BIF previews) -
   all regenerable, and skipping them keeps the archive small and fast to
-  create on a RPI3. Flip `INCLUDE_GENERATED_MEDIA=true` in the backup script
-  if you'd rather not wait for Plex to regenerate those.
+  create. Set `INCLUDE_GENERATED_MEDIA=true` in `config.env` if you'd
+  rather not wait for Plex to regenerate those.
 - The restore script moves aside (not deletes) whatever data directory a
   fresh Plex install creates, to `/var/backups/plex_fresh_install_bak.<timestamp>`
   - deliberately outside `Library/Application Support` entirely, per Plex's
   own warning that anything it doesn't recognize under its data directory can
   get swept up by its periodic cleanup.
 - Plex's official apt repo publishes arm64 builds, so this works whether the
-  RPI5 image is 32-bit or 64-bit Raspberry Pi OS (64-bit recommended).
+  destination image is 32-bit or 64-bit Raspberry Pi OS (64-bit recommended).
 - The backup's `.sha256` checksum guards against accidental corruption/bit-rot
-  during transit, not tampering - it lives on the same USB drive as the
-  archive, so trust here comes from physically controlling that drive, not
-  from cryptographic signing. That's an accepted trade-off for a personal,
+  during transit, not tampering - it lives on the same drive as the archive,
+  so trust here comes from physically controlling that drive, not from
+  cryptographic signing. That's an accepted trade-off for a personal,
   single-user migration tool.
 - The backup's `manifest.txt` includes this machine's hostname and full
-  `lsblk`/`fstab` output (every attached disk, not just the two migration
-  drives) - handy for troubleshooting your own migration, but redact it
-  before pasting into a public forum post or bug report.
+  `lsblk`/`fstab` output (every attached disk, not just the configured
+  migration drives) - handy for troubleshooting your own migration, but
+  redact it before pasting into a public forum post or bug report.
 - A GitHub Actions workflow (`.github/workflows/lint.yml`) runs `bash -n` and
   `shellcheck` on every push, since there's no other automated test suite for
-  a pair of standalone shell scripts.
+  a set of standalone shell scripts.

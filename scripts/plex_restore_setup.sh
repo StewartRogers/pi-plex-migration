@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 #
 # plex_restore_setup.sh - Set up mounts, install Plex, and restore settings
-# on a new machine (the RPI5). Run as root: sudo ./plex_restore_setup.sh
+# on a new, fresh destination machine. Run as root: sudo ./plex_restore_setup.sh
 #
 # Optional argument: path to a specific backup .tar.gz to restore. If
 # omitted, the newest backup found under the configured search paths is used.
 #
 # Steps:
-#   1. Add fstab entries for the two data drives (by UUID) if not present,
-#      then mount them - this keeps library paths identical to the RPI3.
+#   1. Add fstab entries for each configured data drive (by UUID) if not
+#      present, then mount them - this keeps library paths identical to
+#      the source system.
 #   2. Configure the firewall (ufw): allow SSH first, then Plex's ports.
-#   3. Install Plex Media Server from the official Plex apt repo.
-#   4. Stop the freshly-installed service before it creates its own state.
+#   3. Install (or update to the latest) Plex Media Server from the
+#      official Plex apt repo.
+#   4. Stop the service before touching its data dir.
 #   5. Verify and extract the backup archive over the data directory.
 #   6. Fix ownership and start the service.
 
@@ -22,16 +24,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 load_config "$SCRIPT_DIR"
 
-### --- Config: must match the source machine's setup ------------------------
-
-# Where to look for backups if no path is given as $1 (newest *.tar.gz wins)
-BACKUP_SEARCH_DIRS=("${NEWDISK_MOUNT}/plex_backups" "${HDDDISK_MOUNT}/plex_backups")
-
-# Set to "false" to skip all ufw configuration (e.g. if you manage the
-# firewall some other way, or a firewall is already configured to your liking).
-CONFIGURE_FIREWALL=true
-
-### --- End config -----------------------------------------------------------
+# Where to look for backups if no path is given as $1 (newest *.tar.gz wins).
+# Primarily the configured backup destination, but every configured drive's
+# same subdirectory is also checked as a fallback in case that setting
+# changed between the backup and restore runs.
+BACKUP_SEARCH_DIRS=("${BACKUP_DEST_MOUNT}/${BACKUP_DEST_SUBDIR}")
+for entry in "${DRIVES[@]}"; do
+    parse_drive_entry "$entry"
+    candidate="${DRIVE_MOUNT}/${BACKUP_DEST_SUBDIR}"
+    if [[ "$candidate" != "${BACKUP_SEARCH_DIRS[0]}" ]]; then
+        BACKUP_SEARCH_DIRS+=("$candidate")
+    fi
+done
 
 if [[ $EUID -ne 0 ]]; then
     echo "Must be run as root (sudo $0)" >&2
@@ -65,19 +69,22 @@ ensure_fstab_entry() {
     echo "/dev/disk/by-uuid/${uuid}    ${mount_point}         ${fstype}    defaults,nofail   0   0" >> /etc/fstab
 }
 
-ensure_fstab_entry "$HDDDISK_UUID" "$HDDDISK_MOUNT" "$HDDDISK_FSTYPE"
-ensure_fstab_entry "$NEWDISK_UUID" "$NEWDISK_MOUNT" "$NEWDISK_FSTYPE"
+for entry in "${DRIVES[@]}"; do
+    parse_drive_entry "$entry"
+    ensure_fstab_entry "$DRIVE_UUID" "$DRIVE_MOUNT" "$DRIVE_FSTYPE"
+done
 
 log "Mounting all fstab entries..."
 mount -a
 
-for mp in "$HDDDISK_MOUNT" "$NEWDISK_MOUNT"; do
-    if ! mountpoint -q "$mp"; then
-        echo "ERROR: $mp did not mount. Check that the drive is attached and 'lsblk -f' shows the expected UUID." >&2
+for entry in "${DRIVES[@]}"; do
+    parse_drive_entry "$entry"
+    if ! mountpoint -q "$DRIVE_MOUNT"; then
+        echo "ERROR: $DRIVE_MOUNT did not mount. Check that the drive is attached and 'lsblk -f' shows the expected UUID." >&2
         exit 1
     fi
 done
-log "Both drives mounted successfully."
+log "All ${#DRIVES[@]} configured drive(s) mounted successfully."
 
 ### 2. Configure firewall (ufw) ------------------------------------------------
 
@@ -133,25 +140,9 @@ else
     log "CONFIGURE_FIREWALL is false, skipping firewall setup."
 fi
 
-### 3. Install Plex from the official apt repo --------------------------------
+### 3. Install (or update) Plex from the official apt repo --------------------
 
-if dpkg -s plexmediaserver >/dev/null 2>&1; then
-    log "plexmediaserver already installed, skipping install step."
-else
-    log "Adding Plex apt repo..."
-    install -d -m 0755 /usr/share/keyrings
-    # No -L: this key URL isn't expected to redirect, so fail loudly instead
-    # of silently trusting whatever a redirect might point to.
-    curl -fsS https://downloads.plex.tv/plex-keys/PlexSign.key \
-        | gpg --dearmor -o /usr/share/keyrings/plex-archive-keyring.gpg
-
-    echo "deb [signed-by=/usr/share/keyrings/plex-archive-keyring.gpg] https://downloads.plex.tv/repo/deb public main" \
-        > /etc/apt/sources.list.d/plexmediaserver.list
-
-    log "Installing plexmediaserver..."
-    apt-get update -qq
-    apt-get install -y plexmediaserver
-fi
+update_plex_package
 
 ### 4. Stop the service before touching its data dir ---------------------------
 
@@ -168,7 +159,8 @@ if [[ -z "$BACKUP_ARCHIVE" ]]; then
 fi
 
 if [[ -z "$BACKUP_ARCHIVE" || ! -f "$BACKUP_ARCHIVE" ]]; then
-    echo "ERROR: no backup archive found. Pass one explicitly: $0 /mnt/newdisk/plex_backups/<dir>/plex_backup_*.tar.gz" >&2
+    echo "ERROR: no backup archive found under: ${BACKUP_SEARCH_DIRS[*]}" >&2
+    echo "Pass one explicitly: $0 ${BACKUP_DEST_MOUNT}/${BACKUP_DEST_SUBDIR}/<dir>/plex_backup_*.tar.gz" >&2
     exit 1
 fi
 log "Using backup archive: $BACKUP_ARCHIVE"
@@ -215,22 +207,29 @@ else
     echo "WARNING: $PLEX_SERVICE does not appear to be active. Check: systemctl status $PLEX_SERVICE" >&2
 fi
 
+CONFIGURED_MOUNTS=""
+for entry in "${DRIVES[@]}"; do
+    parse_drive_entry "$entry"
+    CONFIGURED_MOUNTS="${CONFIGURED_MOUNTS}${CONFIGURED_MOUNTS:+, }${DRIVE_MOUNT}"
+done
+
 cat <<EOF
 
-Restore finished. Next, check in a browser at http://<rpi5-ip>:32400/web :
+Restore finished. Next, check in a browser at http://<destination-ip>:32400/web :
   - Settings > Manage > Libraries: confirm each library's folder paths
-    resolve (they should, since mount points match the RPI3: $HDDDISK_MOUNT, $NEWDISK_MOUNT).
+    resolve (they should, since mount points match the source system: $CONFIGURED_MOUNTS).
   - If you skipped Media/ (generated thumbnails) in the backup, Plex will
     regenerate scrubber previews/thumbnails over time - no action needed.
   - ufw is now enabled with default-deny incoming. Run 'sudo ufw status verbose'
     to review the rules. If remote access (outside your LAN) was working on
-    the RPI3 via a router port-forward to 32400, that router configuration
-    is separate from this Pi's firewall and points at the old RPI3's LAN IP -
-    you'll need to update the router's forwarding rule to the RPI5's IP.
+    the source system via a router port-forward to 32400, that router
+    configuration is separate from this system's firewall and points at the
+    old system's LAN IP - you'll need to update the router's forwarding rule
+    to this system's IP.
   - Confirm the server shows as the same server (same name/identity) under
     Settings > General, and that Remote Access still works if you use it.
-  - If you disabled "Empty trash automatically after every scan" on the RPI3
-    before backing up, you can turn that back on now.
+  - If you disabled "Empty trash automatically after every scan" on the
+    source system before backing up, you can turn that back on now.
 EOF
 
 if [[ -n "$SAFETY_DIR" ]]; then

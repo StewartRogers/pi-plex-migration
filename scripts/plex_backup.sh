@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # plex_backup.sh - Back up Plex Media Server settings/metadata to a USB drive.
-# Run this ON THE SOURCE PI (the RPI3) as root: sudo ./plex_backup.sh
+# Run this ON THE SOURCE SYSTEM as root: sudo ./plex_backup.sh
 #
 # Backs up the whole Plex "Application Support" data directory (databases,
 # Preferences.xml, metadata, plug-ins) while the service is stopped, so the
@@ -15,20 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 load_config "$SCRIPT_DIR"
 
-### --- Config: edit these if your layout differs ---------------------------
-
-# Destination drive for the backup archive (has the most free space of the two)
-BACKUP_DEST_ROOT="${NEWDISK_MOUNT}/plex_backups"
-
-# How many past backups to keep (older ones are deleted after a successful run)
-RETENTION_COUNT=3
-
-# Set to "true" to also back up Media/ (generated thumbnails/BIF scrubber
-# previews). It's fully regenerable but can be large and slow to rebuild;
-# default is to skip it and let Plex regenerate on demand.
-INCLUDE_GENERATED_MEDIA=false
-
-### --- End config -----------------------------------------------------------
+BACKUP_DEST_ROOT="${BACKUP_DEST_MOUNT}/${BACKUP_DEST_SUBDIR}"
 
 if [[ $EUID -ne 0 ]]; then
     echo "Must be run as root (sudo $0)" >&2
@@ -39,6 +26,8 @@ if [[ ! -d "$PLEX_DATA_DIR" ]]; then
     echo "Plex data directory not found: $PLEX_DATA_DIR" >&2
     exit 1
 fi
+
+update_plex_package
 
 if ! mountpoint -q "$(dirname "$BACKUP_DEST_ROOT")" 2>/dev/null && [[ ! -d "$(dirname "$BACKUP_DEST_ROOT")" ]]; then
     echo "Backup destination parent not found/mounted: $(dirname "$BACKUP_DEST_ROOT")" >&2
