@@ -42,6 +42,9 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
+setup_logging "restore" "$(date '+%Y%m%d_%H%M%S')"
+trap stop_logging EXIT
+
 ### 0. Ensure required packages are present ------------------------------------
 # A fresh Raspberry Pi OS Lite image may not have curl/gnupg/ca-certificates
 # preinstalled, and its apt package index may be stale from image-build time.
@@ -154,13 +157,16 @@ systemctl stop "$PLEX_SERVICE" || true
 BACKUP_ARCHIVE="${1:-}"
 if [[ -z "$BACKUP_ARCHIVE" ]]; then
     log "No backup path given, searching for the newest archive..."
-    BACKUP_ARCHIVE=$(find "${BACKUP_SEARCH_DIRS[@]}" -name '*.tar.gz' -type f -printf '%T@ %p\n' 2>/dev/null \
+    # Matches both *.tar (current, uncompressed) and *.tar.gz (backups made
+    # before compression was dropped - see plex_backup.sh) so older archives
+    # are still found. Extraction below auto-detects either format.
+    BACKUP_ARCHIVE=$(find "${BACKUP_SEARCH_DIRS[@]}" \( -name '*.tar' -o -name '*.tar.gz' \) -type f -printf '%T@ %p\n' 2>/dev/null \
         | sort -rn | head -n1 | cut -d' ' -f2- || true)
 fi
 
 if [[ -z "$BACKUP_ARCHIVE" || ! -f "$BACKUP_ARCHIVE" ]]; then
     echo "ERROR: no backup archive found under: ${BACKUP_SEARCH_DIRS[*]}" >&2
-    echo "Pass one explicitly: $0 ${BACKUP_DEST_MOUNT}/${BACKUP_DEST_SUBDIR}/<dir>/plex_backup_*.tar.gz" >&2
+    echo "Pass one explicitly: $0 ${BACKUP_DEST_MOUNT}/${BACKUP_DEST_SUBDIR}/<dir>/plex_backup_*.tar" >&2
     exit 1
 fi
 log "Using backup archive: $BACKUP_ARCHIVE"
@@ -190,7 +196,10 @@ fi
 
 log "Extracting backup into place..."
 mkdir -p "$PLEX_DATA_PARENT"
-tar -xzf "$BACKUP_ARCHIVE" -C "$PLEX_DATA_PARENT"
+# No -z: GNU tar auto-detects gzip vs. plain from the file's own magic
+# bytes on extraction, regardless of extension, so this handles both
+# current (uncompressed) and older (gzip'd) archives without branching.
+tar -xf "$BACKUP_ARCHIVE" -C "$PLEX_DATA_PARENT"
 
 ### 6. Fix ownership and start ------------------------------------------------
 

@@ -27,6 +27,9 @@ if [[ ! -d "$PLEX_DATA_DIR" ]]; then
     exit 1
 fi
 
+TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
+setup_logging "backup" "$TIMESTAMP"
+
 update_plex_package
 
 if ! mountpoint -q "$(dirname "$BACKUP_DEST_ROOT")" 2>/dev/null && [[ ! -d "$(dirname "$BACKUP_DEST_ROOT")" ]]; then
@@ -34,22 +37,24 @@ if ! mountpoint -q "$(dirname "$BACKUP_DEST_ROOT")" 2>/dev/null && [[ ! -d "$(di
     exit 1
 fi
 
-TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
 WORKDIR="${BACKUP_DEST_ROOT}/${TIMESTAMP}"
-ARCHIVE="${WORKDIR}/plex_backup_${TIMESTAMP}.tar.gz"
+ARCHIVE="${WORKDIR}/plex_backup_${TIMESTAMP}.tar"
 MANIFEST="${WORKDIR}/manifest.txt"
 CHECKSUM="${ARCHIVE}.sha256"
 
 mkdir -p "$WORKDIR"
 
 # Rough free-space sanity check: require at least as much free space as the
-# source directory currently occupies (compressed archive will be smaller,
-# but better to be conservative before we start).
+# source directory currently occupies. The archive isn't compressed (see
+# the tar command below - Plex's Metadata/ is almost entirely artwork,
+# already-compressed JPEG/PNG, so gzip bought negligible size reduction for
+# real CPU cost on Pi-class hardware), so unlike a compressed archive, size
+# won't shrink much beyond whatever the excluded dirs below account for.
 SRC_SIZE_KB=$(du -sk "$PLEX_DATA_DIR" | cut -f1)
 DEST_AVAIL_KB=$(df -Pk "$BACKUP_DEST_ROOT" | awk 'NR==2 {print $4}')
-if (( DEST_AVAIL_KB < SRC_SIZE_KB / 2 )); then
+if (( DEST_AVAIL_KB < SRC_SIZE_KB )); then
     echo "Warning: destination free space (${DEST_AVAIL_KB}KB) looks low vs source size (${SRC_SIZE_KB}KB)." >&2
-    echo "Continuing anyway since excluded dirs (Cache/Media/etc) should shrink this a lot, but keep an eye on it." >&2
+    echo "Continuing anyway since excluded dirs (Cache/Media/etc) should shrink this some, but keep an eye on it." >&2
 fi
 
 SERVICE_WAS_ACTIVE=false
@@ -62,6 +67,7 @@ restart_plex() {
         log "Restarting $PLEX_SERVICE..."
         systemctl start "$PLEX_SERVICE" || echo "WARNING: failed to restart $PLEX_SERVICE - start it manually." >&2
     fi
+    stop_logging
 }
 trap restart_plex EXIT
 
@@ -83,10 +89,21 @@ if [[ "$INCLUDE_GENERATED_MEDIA" != "true" ]]; then
 fi
 
 log "Archiving Plex data directory to $ARCHIVE ..."
-tar "${EXCLUDES[@]}" -czf "$ARCHIVE" -C "$(dirname "$PLEX_DATA_DIR")" "$(basename "$PLEX_DATA_DIR")"
+# No -z/gzip: Metadata/ (the bulk of this) is almost entirely already-
+# compressed JPEG/PNG artwork, so compression saved negligible space while
+# costing real CPU time and minutes of wall-clock time on Pi-class hardware.
+tar "${EXCLUDES[@]}" -cf "$ARCHIVE" -C "$(dirname "$PLEX_DATA_DIR")" "$(basename "$PLEX_DATA_DIR")"
 
 log "Writing checksum..."
 sha256sum "$ARCHIVE" > "$CHECKSUM"
+
+# Copy config.env alongside the backup as a fallback in case it doesn't
+# also get copied to the destination via scp/repo-copy. Doesn't remove the
+# need to bring config.env with you separately: plex_restore_setup.sh needs
+# one at the repo root just to know which drives to mount and where to look
+# for a backup in the first place.
+cp "${SCRIPT_DIR}/../config.env" "${WORKDIR}/config.env"
+chmod 600 "${WORKDIR}/config.env"
 
 log "Writing manifest..."
 {

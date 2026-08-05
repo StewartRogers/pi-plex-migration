@@ -103,7 +103,7 @@ UPDATE_PLEX=true                   # update Plex to latest during both steps?
    It auto-finds the newest backup under your configured drives. To restore
    a specific archive instead:
    ```bash
-   sudo ./scripts/plex_restore_setup.sh /mnt/newdisk/plex_backups/20260802_120000/plex_backup_20260802_120000.tar.gz
+   sudo ./scripts/plex_restore_setup.sh /mnt/newdisk/plex_backups/20260802_120000/plex_backup_20260802_120000.tar
    ```
 7. Open `http://<destination-ip>:32400/web`, confirm libraries and settings
    look right (see the script's final printout for a short checklist), then
@@ -150,6 +150,12 @@ this Pi's firewall - point it at the destination's IP after the move. Set
   all regenerable, and skipping them keeps the archive small and fast to
   create. Set `INCLUDE_GENERATED_MEDIA=true` in `config.env` if you'd
   rather not wait for Plex to regenerate those.
+- The archive (`plex_backup_<timestamp>.tar`) isn't compressed. Most of its
+  bulk is normally `Metadata/` - per-item posters/artwork, already-compressed
+  JPEG/PNG - so gzip bought negligible size reduction in practice while
+  costing real CPU time and wall-clock minutes on Pi-class hardware.
+  Restoring still transparently handles older `.tar.gz` backups made before
+  this change, since `tar` auto-detects compression from the file itself.
 - The restore script moves aside (not deletes) whatever data directory a
   fresh Plex install creates, to `/var/backups/plex_fresh_install_bak.<timestamp>`
   - deliberately outside `Library/Application Support` entirely, per Plex's
@@ -166,6 +172,12 @@ this Pi's firewall - point it at the destination's IP after the move. Set
   `lsblk`/`fstab` output (every attached disk, not just the configured
   migration drives) - handy for troubleshooting your own migration, but
   redact it before pasting into a public forum post or bug report.
+- Each backup also gets its own copy of `config.env` alongside the archive,
+  as a fallback in case the copy at the repo root doesn't make it to the
+  destination. It's a fallback, not a replacement: `plex_restore_setup.sh`
+  still needs a `config.env` at the repo root before it can even mount the
+  configured drives or locate a backup to restore, so keep copying it with
+  the repo as usual.
 - A GitHub Actions workflow (`.github/workflows/lint.yml`) runs `bash -n` and
   `shellcheck` on every push, since there's no other automated test suite for
   a set of standalone shell scripts.

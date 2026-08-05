@@ -5,6 +5,34 @@
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
+LOG_DIR="/var/log/plex-migration"
+
+# Tees all of this script's stdout/stderr (not just log() lines - apt/tar/
+# etc. output too) to a timestamped file under LOG_DIR, in addition to still
+# printing to the console. Logs go there rather than onto a configured drive
+# since the drive's mount status isn't known yet this early in either script.
+# Call once, as root, after the EUID check. Pair with an EXIT trap that
+# calls stop_logging, or the tee process's final buffered lines can be lost
+# (or, if you instead just `wait` for it without restoring fds first, hang
+# forever - the tee's stdin pipe never sees EOF while this shell's own
+# stdout/stderr still point at it).
+setup_logging() {
+    local prefix="$1" timestamp="$2"
+    mkdir -p "$LOG_DIR"
+    LOG_FILE="${LOG_DIR}/${prefix}_${timestamp}.log"
+    exec 3>&1 4>&2
+    exec > >(tee -a "$LOG_FILE") 2>&1
+    log "Logging this run to $LOG_FILE"
+}
+
+# Restores stdout/stderr to what they were before setup_logging, so `tee`
+# sees EOF on its input and can flush + exit, then waits for it. Call from
+# an EXIT trap so this runs on every exit path (success, error, interrupt).
+stop_logging() {
+    exec 1>&3 2>&4 3>&- 4>&-
+    wait 2>/dev/null || true
+}
+
 # shellcheck disable=SC2034
 PLEX_DATA_PARENT="/var/lib/plexmediaserver/Library/Application Support"
 # shellcheck disable=SC2034
