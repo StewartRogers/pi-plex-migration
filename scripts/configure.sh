@@ -96,16 +96,22 @@ for num in $selection; do
 
     # Prefer wherever it's already mounted right now (shown above) over a
     # guessed path - that's the mount point Plex's library paths already
-    # point at, so it's almost always the right answer.
+    # point at, so it's almost always the right answer. Falls back to a
+    # guessed /mnt/<label-or-device> path if it isn't mounted at all yet
+    # (e.g. a fresh destination drive).
     default_mount="$mountpoint"
     if [[ -z "$default_mount" ]]; then
         default_mount="/mnt/$(basename "$path")"
         [[ -n "$label" ]] && default_mount="/mnt/${label}"
     fi
-    read -r -p "Mount point for $path (uuid=$uuid) [$default_mount]: " mount
+    # -e -i pre-fills the input line with the default (editable in place,
+    # not just shown in brackets) and enables readline tab-completion for
+    # paths, so you can Tab through existing /mnt/* directories instead of
+    # typing the whole thing out.
+    read -e -r -i "$default_mount" -p "Mount point for $path (uuid=$uuid): " mount
     mount="${mount:-$default_mount}"
 
-    read -r -p "Filesystem type for $path [$fstype]: " fs
+    read -e -r -i "$fstype" -p "Filesystem type for $path: " fs
     fs="${fs:-$fstype}"
 
     DRIVES+=("${uuid}:${mount}:${fs}")
@@ -137,7 +143,7 @@ if (( backup_idx < 0 || backup_idx >= ${#DRIVES[@]} )); then
 fi
 IFS=':' read -r _ BACKUP_DEST_MOUNT _ <<< "${DRIVES[$backup_idx]}"
 
-read -r -p "Subdirectory for backups under $BACKUP_DEST_MOUNT [plex_backups]: " BACKUP_DEST_SUBDIR
+read -e -r -i "plex_backups" -p "Subdirectory for backups under $BACKUP_DEST_MOUNT: " BACKUP_DEST_SUBDIR
 BACKUP_DEST_SUBDIR="${BACKUP_DEST_SUBDIR:-plex_backups}"
 
 read -r -p "How many past backups to keep [3]: " RETENTION_COUNT
