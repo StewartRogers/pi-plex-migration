@@ -65,8 +65,10 @@ for i in "${!CANDIDATES[@]}"; do
     uuid=$(get_field UUID "$line")
     label=$(get_field LABEL "$line")
     size=$(get_field SIZE "$line")
-    printf "  [%d] %-16s %-6s %-14s %-8s uuid=%s\n" \
-        "$((i + 1))" "$path" "$fstype" "${label:-<no label>}" "$size" "${uuid:-<none>}"
+    mountpoint=$(get_field MOUNTPOINT "$line")
+    printf "  [%d] %-16s %-6s %-14s %-8s uuid=%s%s\n" \
+        "$((i + 1))" "$path" "$fstype" "${label:-<no label>}" "$size" "${uuid:-<none>}" \
+        "${mountpoint:+  (currently mounted at $mountpoint)}"
 done
 echo
 
@@ -85,14 +87,21 @@ for num in $selection; do
     fstype=$(get_field FSTYPE "$line")
     uuid=$(get_field UUID "$line")
     label=$(get_field LABEL "$line")
+    mountpoint=$(get_field MOUNTPOINT "$line")
 
     if [[ -z "$uuid" ]]; then
         echo "Skipping $path - no UUID found (unformatted or unsupported filesystem?)." >&2
         continue
     fi
 
-    default_mount="/mnt/$(basename "$path")"
-    [[ -n "$label" ]] && default_mount="/mnt/${label}"
+    # Prefer wherever it's already mounted right now (shown above) over a
+    # guessed path - that's the mount point Plex's library paths already
+    # point at, so it's almost always the right answer.
+    default_mount="$mountpoint"
+    if [[ -z "$default_mount" ]]; then
+        default_mount="/mnt/$(basename "$path")"
+        [[ -n "$label" ]] && default_mount="/mnt/${label}"
+    fi
     read -r -p "Mount point for $path (uuid=$uuid) [$default_mount]: " mount
     mount="${mount:-$default_mount}"
 

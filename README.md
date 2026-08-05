@@ -22,14 +22,27 @@ Works with any number of drives - one, two, or more - not just a fixed pair.
 
 ## Setup
 
+From the repo root (the directory containing this README and `scripts/`),
+make all three scripts executable once, then run the wizard:
+
 ```bash
+chmod +x scripts/*.sh
 ./scripts/configure.sh
 ```
 
-This scans attached drives with `lsblk`, lets you pick which ones are part
-of your migration, asks where backups should live, and writes `config.env`
-(gitignored, never committed - it's specific to your hardware). It also sets
-permissions to `600`, since the file is sourced as root by both scripts.
+`configure.sh` runs as your normal user (no `sudo`) - it's only
+`plex_backup.sh` and `plex_restore_setup.sh` that need root, later, on
+whichever machine you're backing up or restoring on.
+
+The wizard scans attached drives with `lsblk`, lets you pick which ones are
+part of your migration, asks where backups should live, and writes
+`config.env` in the repo root (gitignored, never committed - it's specific
+to your hardware). It also sets permissions to `600`, since the file is
+sourced as root by both scripts.
+
+For the mount point prompt, if a drive is already mounted, the wizard shows
+you where and defaults to that same path - just press Enter to accept it.
+Only type a different path if you want to mount it somewhere new.
 
 Prefer to do it by hand instead? Copy `config.example.env` to `config.env`
 and fill it in yourself; `lsblk -f` gives you the UUIDs/filesystem types.
@@ -61,15 +74,18 @@ UPDATE_PLEX=true                   # update Plex to latest during both steps?
 
 1. Copy this whole repo (including your filled-in `config.env`) to the
    source system (e.g. `scp -r . pi@source:~/plex-migration/`), or clone it
-   there and run `configure.sh` on that machine.
-2. On the source, in the Plex web app: **Settings > Manage > Libraries**,
-   and disable "Empty trash automatically after every scan" for each
-   library. This is Plex's own recommended prep step before a migration -
-   it stops Plex from prematurely trashing library entries during the
-   transition.
-3. On the source:
+   there and run `configure.sh` on that machine. Either way, `cd` into the
+   repo root on the source and run `chmod +x scripts/*.sh` once - git
+   doesn't preserve the executable bit on a fresh clone/copy, so this is
+   needed again here even if you already ran it locally.
+2. On the source, in the Plex web app, disable "Empty trash automatically
+   after every scan": click the wrench/gear **Settings** icon (top right)
+   > **Server** (left sidebar) > **Library**, and uncheck it there - it's
+   a global server setting, not a per-library one. This is Plex's own
+   recommended prep step before a migration - it stops Plex from
+   prematurely trashing library entries during the transition.
+3. On the source, from the repo root:
    ```bash
-   chmod +x scripts/plex_backup.sh
    sudo ./scripts/plex_backup.sh
    ```
    This updates Plex to the latest version, then writes the archive to
@@ -78,10 +94,10 @@ UPDATE_PLEX=true                   # update Plex to latest during both steps?
    your media plus the fresh backup - over to the destination.
 5. Flash a fresh OS to the destination (e.g. the latest Raspberry Pi OS,
    64-bit), boot it, enable SSH, attach the drive(s).
-6. Copy the repo (including the same `config.env`) to the destination and
-   run:
+6. Copy the repo (including the same `config.env`) to the destination,
+   `cd` into its root, run `chmod +x scripts/*.sh` again (same reason as
+   step 1 - it's a separate copy on a separate machine), then:
    ```bash
-   chmod +x scripts/plex_restore_setup.sh
    sudo ./scripts/plex_restore_setup.sh
    ```
    It auto-finds the newest backup under your configured drives. To restore
@@ -91,7 +107,8 @@ UPDATE_PLEX=true                   # update Plex to latest during both steps?
    ```
 7. Open `http://<destination-ip>:32400/web`, confirm libraries and settings
    look right (see the script's final printout for a short checklist), then
-   re-enable "Empty trash automatically after every scan" from step 2.
+   re-enable "Empty trash automatically after every scan" (same Settings
+   > Server > Library page as step 2).
 
 ## Keeping Plex up to date
 
